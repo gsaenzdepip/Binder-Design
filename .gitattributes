@@ -1,0 +1,28 @@
+# Set the default behavior, in case people don't have core.autocrlf set.
+* text=auto
+
+# Explicitly declare text files you want to always normalize and handle endings correctly
+*.py text
+*.txt text
+*.md text
+*.json text
+*.yaml text
+*.yml text
+*.html text
+*.css text
+*.js text
+# Add other text file extensions relevant to your project
+
+# Declare files that will always have LF line endings (e.g., shell scripts)
+*.sh text eol=lf
+
+# Declare files that will always have CRLF line endings (e.g., Windows batch files)
+*.bat text eol=crlf
+
+# Declare files that should not be touched (binary files)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+# Add other binary file extensions
