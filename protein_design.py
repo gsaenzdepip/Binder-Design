@@ -1,24 +1,33 @@
-#This code should be run in WSL (or Linux) environment.
-
+import logging
 import docker
 import requests
 import sys
 import subprocess
-from pymol import cmd
+# from pymol import cmd #Needs to activate 'pymol' environment in conda.
 import os
 import sys
 import shutil 
 import __main__
 
+
+log_filename  = "logging_info.log"
+log_directory = "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python"
+log_filepath = os.path.join(log_directory, log_filename)
+
+logging.basicConfig(
+    level=logging.INFO,  # Log everything from DEBUG upwards
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename=log_filepath,
+    filemode='w' # 'w' overwrites the file each time, 'a' appends
+)
+
+logger = logging.getLogger()
+
 class Backbone_Gen():
-  def __init__(self, input_folder = "", output_folder = "", models_folder = "", model_num = 100, hotspots = "", noise = 0.5, contigs = "", pdb_id = ""):
+  def __init__(self, input_folder = "", output_folder = "", models_folder = "", pdb_id = ""):
     self.inputs = input_folder
     self.outputs = output_folder
     self.models = models_folder
-    self.model_num = model_num
-    self.hotspots = hotspots
-    self.noise = noise
-    self.contigs = contigs
     self.pdb_id = pdb_id
 
   def get_pdb_file(self):
@@ -42,6 +51,8 @@ class Backbone_Gen():
       Removes everything except protein (amino acids) from the loaded structure
       and saves the cleaned structure as '<pdb_id>_cleaned.pdb'.
 
+      IMPORTANT: Needs to activate 'pymol' environment in conda.
+
       :param pdb_id: The base PDB identifier (string) used in the saved file name.
 
       List of methods for Pymol cmd: https://pymol.org/dokuwiki/doku.php?id=api:cmd:alpha
@@ -60,6 +71,9 @@ class Backbone_Gen():
   def chain_residue_ranges(self):
       """
       Shows the different chains and residue ranges in the protein of the loaded and cleaned PDB file.
+
+      IMPORTANT: Needs to activate 'pymol' environment in conda.
+
       """
       cmd.load(f'{self.inputs}/{self.pdb_id}_cleaned.pdb', f'{self.pdb_id}')
 
@@ -79,99 +93,127 @@ class Backbone_Gen():
               sorted_residues = sorted(residues)
           print(f"\nChain {chain}: residues {sorted_residues[0]}-{sorted_residues[-1]}")
 
-  def backbone_gen(self):
+  def backbone_gen(self, model_num = 20, hotspots = "", noise = 0, contigs = ""):
     '''
     Task:
       Designs backbones of binders against a target protein using RFdiffusion.
     '''
-    client = docker.from_env()
+    try:
+      logger.info("\nStarting the Backbone Design with RFdiffusion...\n")
+      logger.info(f"\nConfiguration:\n"
+                  f"Number of basckbone designs: {model_num}\n"
+                  f"Noise level: {noise}\n"
+                  f"Contigs: {contigs}\n"
+                  f"Hotspots: {hotspots}\n"
+                  f"Target PDB ID: {self.pdb_id}\n"
+                  )
 
-    #Docker Volume Mounts and File Accessibility. Docker container does not have direct access to Windows file paths unless you mount the host directories into the container.
-    volumes = {
-    self.models: {'bind': '/models', 'mode': 'rw'},
-    self.inputs: {'bind': '/inputs', 'mode': 'rw'},
-    self.outputs: {'bind': '/outputs', 'mode': 'rw'},
-    }
+      client = docker.from_env()
 
-    # Define the command you want to run inside the container.
-    # Note: Use Linux-style paths (the ones mounted in the container) for parameters.
-    command = [
-        f"inference.output_prefix=/outputs/{self.pdb_id}_design",
-        f"inference.model_directory_path=/models",
-        f"inference.input_pdb=/inputs/{self.pdb_id}_cleaned.pdb",
-        f"inference.num_designs={self.model_num}",
-        f"contigmap.contigs=[{self.contigs}]",
-        f"ppi.hotspot_res=[{self.hotspots}]",
-        f"denoiser.noise_scale_ca={self.noise}",
-        f"denoiser.noise_scale_frame={self.noise}"
-    ]
+      #Docker Volume Mounts and File Accessibility. Docker container does not have direct access to Windows file paths unless you mount the host directories into the container.
+      volumes = {
+      self.models: {'bind': '/models', 'mode': 'rw'},
+      self.inputs: {'bind': '/inputs', 'mode': 'rw'},
+      self.outputs: {'bind': '/outputs', 'mode': 'rw'},
+      }
 
-    # For GPU support, we can specify device_requests (Docker SDK version 4.4+)
-    device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])]
+      # Define the command you want to run inside the container.
+      # Note: Use Linux-style paths (the ones mounted in the container) for parameters.
+      command = [
+          f"inference.output_prefix=/outputs/{self.pdb_id}_design",
+          f"inference.model_directory_path=/models",
+          f"inference.input_pdb=/inputs/{self.pdb_id}_cleaned.pdb",
+          f"inference.num_designs={model_num}",
+          f"contigmap.contigs=[{contigs}]",
+          f"ppi.hotspot_res=[{hotspots}]",
+          f"denoiser.noise_scale_ca={noise}",
+          f"denoiser.noise_scale_frame={noise}"
+      ]
 
-    # Run the container
-    container = client.containers.run(
-        image="rfdiffusion",    # Tag of the docker image
-        command=command,
-        volumes=volumes,
-        detach=True,            # Run container in the background
-        device_requests=device_requests,  # Enable GPU support
-        # environment={"HYDRA_FULL_ERROR": "1"} # Allows to print errors
-    )
+      # For GPU support, we can specify device_requests (Docker SDK version 4.4+)
+      device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])]
 
-    # print("Container started with ID:", container.id)
+      # Run the container
+      container = client.containers.run(
+          image="rfdiffusion",    # Tag of the docker image
+          command=command,
+          volumes=volumes,
+          detach=True,            # Run container in the background
+          device_requests=device_requests,  # Enable GPU support
+          # environment={"HYDRA_FULL_ERROR": "1"} # Allows to print errors
+      )
 
-    # Optionally wait for the container to finish and then print the logs
-    container.wait()
-    logs = container.logs()
-    print("Container logs:")
-    print(logs.decode("utf-8"))
+      # print("Container started with ID:", container.id)
 
-    container.remove()
+      # Optionally wait for the container to finish and then print the logs
+      container.wait()
+      logs = container.logs()
+      print("Container logs:")
+      print(logs.decode("utf-8"))
+
+      container.remove()
+      logger.info("\nRFdiffusion executed successfully.\n")
+
+    except Exception as error:
+       logger.info(f'An error happened during Backbone Generation: {error}')
+
 
 class Sequence_Gen():
 
-  def __init__(self, input_folder = "", output_folder = "", pdb_id = ""):
+  def __init__(self, input_folder = "", output_folder = "", temp_dir = "", executable=""):
     self.inputs = input_folder
     self.outputs = output_folder
-    self.pdb_id = pdb_id
+    self.temp_dir = temp_dir
+    self.executable = executable
 
-  def sequence_design():
-      """Runs ProteinMPNN using the PDB files (input) corresponding to the backbones designed by RFdiffusion."""
-
+  def sequence_design(self, relax_cycles, seqs_per_struct, temperature):
+      """
+      Runs ProteinMPNN using the PDB files (input) corresponding to the backbones designed by RFdiffusion.
+      """
+      logger.info("\nStarting Sequence Design with ProteinMPNN...\n")
+      logger.info(f"\nConfiguration:\n"
+            f"Number of relax cycles: {relax_cycles}\n"
+            f"Sequences per backbone: {seqs_per_struct}\n"
+            f"Temperature: {temperature}\n"
+            )
+      
       # Remove the checkpoint file (from a previous run)
       checkpoint_file = "check.point" # File to remove before starting
       try:
           os.remove(checkpoint_file)
-      except OSError as e:
-          print(f"'{checkpoint_file}': {e}", file=sys.stderr)
+      except Exception as e:
+          logger.info(f"'{checkpoint_file}': {e}")
 
       # Remove previous temporary directory (if it exists)
-      if os.path.exists(temp_dir):
-          shutil.rmtree(temp_dir)
+      if os.path.exists(self.temp_dir):
+          shutil.rmtree(self.temp_dir)
 
       # Copy PBD files to a temporary directory (I need to do this because OneDrive gives errors)
-      if not os.path.isdir(pdb_input_dir):
-              raise FileNotFoundError(f"Source directory not found: {pdb_input_dir}")
-      else:
-          shutil.copytree(pdb_input_dir, temp_dir)
-
+      try:
+        if not os.path.isdir(self.inputs):
+                raise FileNotFoundError()
+      except Exception as error:
+         logger.info(f"Source directory with PDB files from RFdiffusion not found: {self.inputs}. {error}")
+         sys.exit()
+      
+      shutil.copytree(self.inputs, self.temp_dir)
 
       # Construct the command arguments as a list
       command_to_run_in_conda = [
           "python", # Use the python from the 'binder_design' env
-          executable_path, #Path to the ProteinMPNN executing .py file
-          "-pdbdir", temp_dir,
+          self.executable, #Path to the ProteinMPNN executing .py file
+          "-pdbdir", self.temp_dir,
           "-relax_cycles", str(relax_cycles),
           "-seqs_per_struct", str(seqs_per_struct),
-          "-outpdbdir", output_dir
+          "-temperature", str(temperature),
+          "-outpdbdir", self.outputs
       ]
 
       # Full command for subprocess
       conda_run_command = ["conda",
           "run",
           "-n", "binder_design", #Name of the conda environment
-          "--cwd", temp_dir, # Run the command with temp_work_dir as CWD
+          "--cwd", self.temp_dir, # Run the command with temp_work_dir as CWD
           *command_to_run_in_conda # Unpack the command list
       ]
 
@@ -184,7 +226,6 @@ class Sequence_Gen():
               text=True #The captured output and errors are converted to strings.
           )
 
-          print("\nProteinMPNN executed successfully.\n")
           print("--- Standard Output ---")
           print(result.stdout)
           print("-----------------------")
@@ -194,42 +235,21 @@ class Sequence_Gen():
               print("------------------------------------")
 
       except Exception as error:
-          print(f"\nAn unexpected error occurred: {error}", file=sys.stderr)
+          logger.info(f"\nAn unexpected error occurred: {error}", file=sys.stderr)
           sys.exit()
 
       finally:
           # Always attempt to remove the temporary directory
-          if os.path.exists(temp_dir):
+          if os.path.exists(self.temp_dir):
               try:
-                  shutil.rmtree(temp_dir)
+                  shutil.rmtree(self.temp_dir)
               except OSError as error:
-                  print(f"Error removing temporary directory {temp_dir}: {error}")
+                  logger.info(f"Error removing temporary directory {self.temp_dir}: {error}")
 
-  def fasta_gen(self):
-    '''
-    Task:
-      - Creates two FASTA files from the ProteinMPNN output.
-    '''
-    # Open the input file and read all lines
-    with open(f"{self.outputs}/seqs/{self.pdb_id}_model_0.fa", "r") as infile:
-        lines = infile.readlines()
-
-    # Note: Python lists are zero-indexed. So line 4 is index 3 and line 6 is index 5.
-    sample1_seq = lines[3].strip()  # Sequence for sample 1 (line 4)
-    # sample2_seq = lines[5].strip()  # Sequence for sample 2 (line 6)
-
-    # Write sample 1 to its own FASTA file with a custom header
-    with open(f"{self.outputs}/seqs/{self.pdb_id}_model_0_seq_1.fasta", "w") as out1:
-        out1.write(f">{self.pdb_id}_seq_1\n")
-        out1.write(sample1_seq + "\n")
-
-    # Write sample 2 to its own FASTA file with a custom header
-    # with open(f"{self.outputs}/seqs/{self.pdb_id}_model_0_seq_2.fasta", "w") as out2:
-    #     out2.write(f">{self.pdb_id}_seq_2\n")
-    #     out2.write(sample2_seq + "\n")
+      logger.info("\nProteinMPNN executed successfully.\n")
 
 
-class Folding():
+class Structure_Prediction():
 
   def __init__(self):
      pass
@@ -287,40 +307,54 @@ class Folding():
 
         
     except docker.errors.DockerException as e:
-        print(f"An error occurred: {e}")
+        logger.info(f"An error occurred: {e}")
     
     container.remove()
 
 if __name__ == "__main__":
 
   RFdif_settings = {
-  "input_folder": "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/inputs", # Add directory where the PDB file will be downloaded
-  "output_folder": "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs", # Add directory where the designed proteins will be saved
-  "models_folder": "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/models", # Add directory where the RFdiffusion models are saved
-  "model_num": 20, # Number of designs to generate
-  "hotspots": "A56, A115, A123",
-  "noise": 0,
-  "contigs": "A17-145/0 50-100", # Configuration of the protein designC
-  "pdb_id": "5O45" # Add the PDB ID
+  "input_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/inputs", # Add directory where the PDB file will be downloaded
+  "output_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs", # Add directory where the designed proteins will be saved
+  "models_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/models", # Add directory where the RFdiffusion models are saved
+  "model_num": 20, # Number of backbone designs to generate
+  "hotspots": "A56, A115, A123", #Hotspot residues that condition the diffusion process
+  "noise": 0, #Noise to add to the inference (the lower the better)
+  "contigs": "A17-145/0 50-100", # Configuration of the binder design
+  "pdb_id": "5O45" # The PDB ID of the target protein
   }
 
   ProteinMPNN_settings = {
-  "input_folder": "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs",
-  "output_folder": "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Gen/output"
+  "input_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs",
+  "temp_dir": "/mnt/c/pdb_temp_work",
+  "executable": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/dl_binder_design/mpnn_fr/dl_interface_design.py",
+  "output_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Gen_output",
+  "relax_cycles": 1, #The number of relax cycles to perform on each structure (default: 1)
+  "seqs_per_struct": 1, #The number of sequences to generate for each structure (default: 1)
+  "temperature": 0.0001 #The sampling temperature to use when running ProteinMPNN (default: 0.0001)
   }
 
-# 1. Backbone design
-  backbone = Backbone_Gen(input_folder = RFdif_settings["input_folder"], output_folder = RFdif_settings["output_folder"], models_folder = RFdif_settings["models_folder"], model_num = RFdif_settings["model_num"], hotspots = RFdif_settings["hotspots"], noise = RFdif_settings["noise"], contigs = RFdif_settings["contigs"], pdb_id = RFdif_settings["pdb_id"])
+############ NOTES #################
+# This code should be run in WSL (or Linux) environment. In VS Code go to the >< sign (left bottom corner) and Connect to WSL.
+# Initiate 'binder_design' environment in Conda, where ProteinMPNN and AF2 'initial guess' are installed. Choose the python interpreter in that same environment (3.10).
+# Initiate 'pymol' environment in Conda when 'pymol' module is needed.
+
+
+####################################
+
+#1. Backbone design
+  backbone = Backbone_Gen(input_folder = RFdif_settings["input_folder"], output_folder = RFdif_settings["output_folder"], models_folder = RFdif_settings["models_folder"], pdb_id = RFdif_settings["pdb_id"])
   # backbone.get_pdb_file()
   # backbone.remove_non_protein()
   # backbone.chain_residue_ranges()
-  backbone.backbone_gen()
+  # backbone.backbone_gen(model_num = RFdif_settings["model_num"], hotspots = RFdif_settings["hotspots"], noise = RFdif_settings["noise"], contigs = RFdif_settings["contigs"])
 
-  sequence = Sequence_Gen(input_folder = ProteinMPNN_settings["input_folder"], output_folder = ProteinMPNN_settings["output_folder"], pdb_id=RFdif_settings["pdb_id"])
-  # sequence.protein_mpnn()
-  # sequence.fasta_gen()
+#2. Sequence design
+  sequence = Sequence_Gen(input_folder = ProteinMPNN_settings["input_folder"], output_folder = ProteinMPNN_settings["output_folder"], temp_dir = ProteinMPNN_settings["temp_dir"], executable = ProteinMPNN_settings["executable"])
+  sequence.sequence_design(relax_cycles=ProteinMPNN_settings["relax_cycles"], seqs_per_struct=ProteinMPNN_settings["seqs_per_struct"], temperature=ProteinMPNN_settings["temperature"])
 
-  folded_protein = Folding()
+#3. Structure prediction
+  folded_protein = Structure_Prediction()
   # folded_protein.colab_fold()
 
 
