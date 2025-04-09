@@ -1,5 +1,5 @@
 **Intro**
-This repository contains the code for running a Binder Design using state-of-the-art RFdiffusion, ProteinMPNN and AF2 'initial guess'. 
+This repository contains the code for designing Binders using state-of-the-art RFdiffusion, ProteinMPNN and AF2 'initial guess'. 
 I included the repositories to install all the necessary Python libraries:
 
 https://github.com/RosettaCommons/RFdiffusion?tab=readme-ov-file#the-inpaint_seq-flag
