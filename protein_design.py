@@ -7,6 +7,7 @@ import subprocess
 import os
 import sys
 import shutil 
+import re
 import __main__
 
 
@@ -93,7 +94,7 @@ class Backbone_Gen():
               sorted_residues = sorted(residues)
           print(f"\nChain {chain}: residues {sorted_residues[0]}-{sorted_residues[-1]}")
 
-  def backbone_gen(self, model_num = 20, hotspots = "", noise = 0, contigs = ""):
+  def backbone_gen(self, design_num = 20, hotspots = "", noise = 0, contigs = ""):
     '''
     Task:
       Designs backbones of binders against a target protein using RFdiffusion.
@@ -101,7 +102,7 @@ class Backbone_Gen():
     try:
       logger.info("\nStarting the Backbone Design with RFdiffusion...\n")
       logger.info(f"\nConfiguration:\n"
-                  f"Number of basckbone designs: {model_num}\n"
+                  f"Number of backbone designs: {design_num}\n"
                   f"Noise level: {noise}\n"
                   f"Contigs: {contigs}\n"
                   f"Hotspots: {hotspots}\n"
@@ -123,7 +124,7 @@ class Backbone_Gen():
           f"inference.output_prefix=/outputs/{self.pdb_id}_design",
           f"inference.model_directory_path=/models",
           f"inference.input_pdb=/inputs/{self.pdb_id}_cleaned.pdb",
-          f"inference.num_designs={model_num}",
+          f"inference.num_designs={design_num}",
           f"contigmap.contigs=[{contigs}]",
           f"ppi.hotspot_res=[{hotspots}]",
           f"denoiser.noise_scale_ca={noise}",
@@ -213,7 +214,7 @@ class Sequence_Gen():
       conda_run_command = ["conda",
           "run",
           "-n", "binder_design", #Name of the conda environment
-          "--cwd", self.temp_dir, # Run the command with temp_work_dir as CWD
+          "--cwd", self.temp_dir, # Run the command with temp_dir as CWD
           *command_to_run_in_conda # Unpack the command list
       ]
 
@@ -251,65 +252,263 @@ class Sequence_Gen():
 
 class Structure_Prediction():
 
-  def __init__(self):
-     pass
+  def __init__(self, input_folder = "", output_folder = "", temp_dir = "", executable="", design_num=0):
+    self.inputs = input_folder
+    self.outputs = output_folder
+    self.temp_dir = temp_dir
+    self.executable = executable
+    self.design_num = design_num
+    self.results = {}
+    self.results_dict()
+
+  def results_dict(self):
+      for index in range(self.design_num):
+          self.results[f"design_{index}"] = {}
+
+  def af2_initial_guess(self):
+      """
+      Runs AF2 'initial guess' using the PDB files (input) corresponding to the sequences designed by ProteinMPNN.
+      """
+      logger.info("\nStarting Sequence Design with AF2 'initial guess' using default configuration...\n")
+      
+      # Remove the checkpoint file (from a previous run)
+      checkpoint_file = "check.point" # File to remove before starting
+      try:
+          os.remove(checkpoint_file)
+      except Exception as e:
+          logger.info(f"'{checkpoint_file}': {e}")
+
+      # Remove previous temporary directory (if it exists)
+      if os.path.exists(self.temp_dir):
+          shutil.rmtree(self.temp_dir)
+
+      # Copy PBD files to a temporary directory (I need to do this because OneDrive gives errors)
+      try:
+        if not os.path.isdir(self.inputs):
+                raise FileNotFoundError()
+      except Exception as error:
+         logger.info(f"Source directory with PDB files from ProteinMPNN not found: {self.inputs}. {error}")
+         sys.exit()
+      
+      shutil.copytree(self.inputs, self.temp_dir)
+
+      # Construct the command arguments as a list
+      command_to_run_in_conda = [
+          "python", # Use the python from the 'binder_design' env
+          self.executable, #Path to the AF2 executing .py file
+          "-pdbdir", self.temp_dir,
+          "-outpdbdir", self.outputs
+      ]
+
+      # Full command for subprocess
+      conda_run_command = ["conda",
+          "run",
+          "-n", "binder_design", #Name of the conda environment
+          "--cwd", self.temp_dir, # Run the command with temp_dir as CWD
+          *command_to_run_in_conda # Unpack the command list
+      ]
+
+      # Run the command using subprocess
+      try:
+          result = subprocess.run(
+              conda_run_command,
+              check=True, #Will raise an exception if something fails
+              capture_output=True, #Captures the standard output and standard error.
+              text=True #The captured output and errors are converted to strings.
+          )
+
+          for line in result.stdout.splitlines():                
+          # Remove leading/trailing whitespace
+            stripped_line = line.strip()
+
+            pattern = r"design_\d+" #Looks for a pattern like 'design_1'
+            match = re.search(pattern, stripped_line)
+            if match:
+              # If a match is found, extract the matched string
+              design_number = match.group(0)
+
+            # Check if the line looks like a dictionary string
+            if stripped_line.startswith('{') and stripped_line.endswith('}'):
+              dict_string = stripped_line
+              parsed_dict = eval(dict_string)
+              self. results[f"{design_number}"]["plddt_binder"] = parsed_dict["plddt_binder"]
+              self. results[f"{design_number}"]["pae_interaction"] = parsed_dict["pae_interaction"]
+              self. results[f"{design_number}"]["binder_aligned_rmsd"] = parsed_dict["binder_aligned_rmsd"]
+
+          # print("--- Standard Output ---")
+          # print(result.stdout)
+          # print("-----------------------")
+          # if result.stderr:
+          #     print("--- Standard Error (Warnings/Info) ---")
+          #     print(result.stderr)
+          #     print("------------------------------------")
+
+      except Exception as error:
+          logger.info(f"\nAn unexpected error occurred: {error}", file=sys.stderr)
+          sys.exit()
+
+      finally:
+          # Always attempt to remove the temporary directory
+          if os.path.exists(self.temp_dir):
+              try:
+                  shutil.rmtree(self.temp_dir)
+              except OSError as error:
+                  logger.info(f"Error removing temporary directory {self.temp_dir}: {error}")
 
 
-  def colab_fold(self):
-    # Initialize the Docker client from environment variables
-    client = docker.from_env()
+      logger.info("\nAF2 'initial guess' executed successfully.\n")
 
-    # Define your paths
-    weights_path = "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Evaluation/cache/colabfold"
-    input_path = "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Gen/output/seqs"
-    output_path = "C:/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Evaluation/output"
+      logger.info(f'\nAF2 results:\n{self.results}\n')
 
-    # Create a dictionary for volume bindings
-    volumes = {
-        weights_path: {'bind': '/colabfold', 'mode': 'rw'},
-        input_path: {'bind': '/seqs', 'mode': 'rw'},
-        output_path: {'bind': '/output', 'mode': 'rw'}
-    }
+  def ddg(self, index):
+      '''
+      Uses RosettaScripts to measure binding energy (ddg).
+      '''
 
-    # Commands to be executed inside the container:
+      # --- Configuration ---
+      rosetta_executable = "/home/gsaenzdepip/Rosetta/main/source/bin/rosetta_scripts.default.linuxgccrelease"
+      input_pdb = f"AF2_initial_guess_output/5O45_design_{index}_dldesign_0_cycle1_af2pred.pdb"
+      input_xml = "ddg.xml"
+      output_scorefile = "score.sc" # Default score file name
 
-    command = "colabfold_batch --model-type alphafold2_ptm --num-recycle 0 --num-models 1 --data /colabfold /seqs/1WHQ_model_0_seq_1.fasta /output"
-    # command = "colabfold_batch --msa-only --data /colabfold /seqs/1WHQ_model_0_seq_1.fasta /output" # Get only the MSA
+      # --- Determine expected output PDB name ---
+      # Assumes Rosetta appends _0001 before the extension
+      pdb_basename = os.path.basename(input_pdb)
+      pdb_stem, pdb_ext = os.path.splitext(pdb_basename)
+      expected_output_pdb = f"{pdb_stem}_0001{pdb_ext}"
 
-    # command = "colabfold_batch --help"
+      # --- Build the command ---
+      command = [
+          rosetta_executable,
+          "-s", input_pdb,
+          "-parser:protocol", input_xml,
+          # Optional: Explicitly name the output score file
+          # "-out:file:scorefile", output_scorefile
+          # Optional: Prevent PDB output if you ONLY want the score
+          # "-out:nooutput" # If you add this, the PDB removal below is unnecessary
+      ]
 
-    # For GPU support, we can specify device_requests (Docker SDK version 4.4+)
-    device_requests = [docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])]
+      # --- Variables to store results ---
+      ddg_value = None
+      rosetta_success = False
 
-    try:
-        # Run the container
-        container = client.containers.run(
-            image="ghcr.io/sokrypton/colabfold:1.5.5-cuda12.2.2",
-            command=command,
-            volumes=volumes,
-            runtime="nvidia",  # Make sure NVIDIA Container Toolkit is installed
-            device_requests=device_requests,
-            detach=True,
-            # tty=False,
-            # stdin_open=False,
-            # environment={"HYDRA_FULL_ERROR": "1"} # Allows to print errors
-        )
+      # --- Main Execution Block ---
+      try:
+        logger.info(f"\nRunning Rosetta command: {' '.join(command)}\n")
+        subprocess.run(command, capture_output=True, text=True, check=True, timeout=600)
+        logger.info(f"\nRosetta command completed successfully.\n")
+        rosetta_success = True
 
-        # Attach to logs
-        log_stream = container.logs(stream=True)
-        for log in log_stream:
-            sys.stdout.write(log.decode("utf-8"))  # Writes log output without adding extra newlines
-            sys.stdout.flush()  # Ensures immediate output
+      except Exception as e:
+        print(f"An unexpected error occurred while running Rosetta: {e}")
 
-        # Wait for the container to finish
-        container.wait()
+      # --- Parse the Score File (only if Rosetta ran successfully) ---
+      if rosetta_success:
+          try:
+              if not os.path.exists(output_scorefile):
+                  raise FileNotFoundError(f"Output file '{output_scorefile}' not found. Did Rosetta create it?")
 
+              with open(output_scorefile, 'r') as f:
+                  lines = f.readlines()
 
+              header_line_content = None
+              header_line_index = -1
+              last_data_line_content = None
+              ddg_index = -1
+
+              # Find header line index and content
+              for i, line in enumerate(lines):
+                  stripped_line = line.strip()
+                  if stripped_line.startswith("SCORE:"):
+                      header_line_content = stripped_line
+                      header_line_index = i
+                      break # Found the header
+
+              if header_line_content is None:
+                  print(f"Error: Could not find header line starting with 'SCORE:' in '{output_scorefile}'")
+              else:
+                  # Find the *last* non-empty line after the header that looks like data
+                  for i in range(len(lines) - 1, header_line_index, -1):
+                      stripped_line = lines[i].strip()
+                      # Add checks to skip known non-data lines if necessary
+                      if stripped_line and not stripped_line.startswith("SEQUENCE:") and not stripped_line.startswith("REMARK:"):
+                          last_data_line_content = stripped_line
+                          break # Found the last potential data line
+
+                  if last_data_line_content is None:
+                      print(f"Error: Could not find any potential data lines after the header in '{output_scorefile}'")
+                  else:
+                      headers = header_line_content.split()
+                      try:
+                          ddg_index = headers.index("ddg")
+                      except ValueError:
+                          print(f"Error: Column 'ddg' not found in header line of '{output_scorefile}'")
+                          print(f"Available columns: {headers}")
+
+                      if ddg_index != -1:
+                          values = last_data_line_content.split()
+                          if len(values) > ddg_index:
+                              try:
+                                  ddg_value = float(values[ddg_index])
+                                  print(f"Successfully extracted ddg value: {ddg_value}")
+                              except (ValueError, IndexError):
+                                  print(f"Error: Could not convert value in column 'ddg' to a number on the data line.")
+                                  print(f"Data line content: {last_data_line_content}")
+
+          except Exception as e:
+              print(f"An unexpected error occurred during score file parsing: {e}")
+
+          finally:
+              # Remove score file
+              try:
+                  if os.path.exists(output_scorefile):
+                      os.remove(output_scorefile)
+              except Exception as e:
+                  print(f"Error removing file '{output_scorefile}': {e}")
+
+              # Remove generated PDB file
+              try:
+                  # Check if the command included -out:nooutput before attempting removal
+                  if "-out:nooutput" not in command:
+                      if os.path.exists(expected_output_pdb):
+                          os.remove(expected_output_pdb)
+                          print(f"Removed '{expected_output_pdb}'")
+                      else:
+                          print(f"File '{expected_output_pdb}' not found, skipping removal.")
+                  else:
+                      print(f"PDB output was suppressed (-out:nooutput), skipping removal of '{expected_output_pdb}'.")
+              except OSError as e:
+                  print(f"Error removing file '{expected_output_pdb}': {e}")
+
+          # --- Final Result ---
+          if ddg_value is not None:
+              self.results[f"Design_{index}"]["ddg"] = ddg_value
+
+  def filter_designs(self):
+    '''
+    Filters designs based on pae_interaction, pLDDT, RMSD and, optionally, ddg.
+    '''
+    logger.info(f'\nStarting Filtering of Designs...\n\n')
+    num_designs = 0
+    design_id = []
+    for design in self.results.keys():
+        try:
+          if self.results[design]['plddt_binder'] > 80 and self.results[design]['pae_interaction'] < 10 and self.results[design]['binder_aligned_rmsd'] < 1:
+              if 'ddg' in self.results[design].keys() and self.results[design]['ddg'] < -40:
+                  num_designs += 1
+                  design_id.append(design)
+              elif 'ddg' not in self.results[design].keys():
+                  num_designs += 1
+                  design_id.append(design) 
+
+        except Exception:
+            continue
         
-    except docker.errors.DockerException as e:
-        logger.info(f"An error occurred: {e}")
-    
-    container.remove()
+    logger.info(f'\nNumber of successful designs: {num_designs}\n'
+                f'\nRate of successful designs: {num_designs}/{self.design_num}\n'
+                f'\nSuccessful designs IDs: {design_id}\n'
+                )                 
+
 
 if __name__ == "__main__":
 
@@ -317,11 +516,11 @@ if __name__ == "__main__":
   "input_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/inputs", # Add directory where the PDB file will be downloaded
   "output_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs", # Add directory where the designed proteins will be saved
   "models_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/models", # Add directory where the RFdiffusion models are saved
-  "model_num": 20, # Number of backbone designs to generate
-  "hotspots": "A56, A115, A123", #Hotspot residues that condition the diffusion process
+  "design_num": 10, # Number of backbone designs to generate
+  "hotspots": "B58, B80, B139", #Hotspot residues that condition the diffusion process
   "noise": 0, #Noise to add to the inference (the lower the better)
-  "contigs": "A17-145/0 50-100", # Configuration of the binder design
-  "pdb_id": "5O45" # The PDB ID of the target protein
+  "contigs": "A7-98/0 A122-147/0 B17-209/0 100-100", # Configuration of the binder design
+  "pdb_id": "3DI3" # The PDB ID of the target protein
   }
 
   ProteinMPNN_settings = {
@@ -332,6 +531,12 @@ if __name__ == "__main__":
   "relax_cycles": 1, #The number of relax cycles to perform on each structure (default: 1)
   "seqs_per_struct": 1, #The number of sequences to generate for each structure (default: 1)
   "temperature": 0.0001 #The sampling temperature to use when running ProteinMPNN (default: 0.0001)
+  }
+  AF2_settings = {
+  "input_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Sequence_Gen_output",
+  "temp_dir": "/mnt/c/pdb_temp_work",
+  "executable": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/dl_binder_design/af2_initial_guess/predict.py",
+  "output_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/AF2_initial_guess_output",
   }
 
 ############ NOTES #################
@@ -345,17 +550,26 @@ if __name__ == "__main__":
 #1. Backbone design
   backbone = Backbone_Gen(input_folder = RFdif_settings["input_folder"], output_folder = RFdif_settings["output_folder"], models_folder = RFdif_settings["models_folder"], pdb_id = RFdif_settings["pdb_id"])
   # backbone.get_pdb_file()
-  # backbone.remove_non_protein()
-  # backbone.chain_residue_ranges()
-  # backbone.backbone_gen(model_num = RFdif_settings["model_num"], hotspots = RFdif_settings["hotspots"], noise = RFdif_settings["noise"], contigs = RFdif_settings["contigs"])
+  # backbone.remove_non_protein() #Pymol required
+  # backbone.chain_residue_ranges() #Pymol required
+  backbone.backbone_gen(design_num = RFdif_settings["design_num"], hotspots = RFdif_settings["hotspots"], noise = RFdif_settings["noise"], contigs = RFdif_settings["contigs"])
 
 #2. Sequence design
   sequence = Sequence_Gen(input_folder = ProteinMPNN_settings["input_folder"], output_folder = ProteinMPNN_settings["output_folder"], temp_dir = ProteinMPNN_settings["temp_dir"], executable = ProteinMPNN_settings["executable"])
   sequence.sequence_design(relax_cycles=ProteinMPNN_settings["relax_cycles"], seqs_per_struct=ProteinMPNN_settings["seqs_per_struct"], temperature=ProteinMPNN_settings["temperature"])
 
 #3. Structure prediction
-  folded_protein = Structure_Prediction()
-  # folded_protein.colab_fold()
+  folded_protein = Structure_Prediction(input_folder = AF2_settings["input_folder"], output_folder = AF2_settings["output_folder"], temp_dir = AF2_settings["temp_dir"], executable = AF2_settings["executable"], design_num = RFdif_settings["design_num"])
+  folded_protein.af2_initial_guess()
+
+#4. OPTIONAL: calculate binding energy (ddg)
+  # for index in range(RFdif_settings["design_num"]):
+  #   folded_protein.ddg(index)
+  #   print(folded_protein.results)
+
+#5. Filter structures based on pae_interaction, pLDDT, RMSD and, optionally, ddg
+  folded_protein.filter_designs()
+  
 
 
 

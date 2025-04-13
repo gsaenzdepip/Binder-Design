@@ -3,3 +3,4 @@ Backbone_Gen/models/*
 Backbone_Gen/inputs/*
 Backbone_Gen/outputs/*
 Sequence_Gen_output/*
+AF2_initial_guess_output/*

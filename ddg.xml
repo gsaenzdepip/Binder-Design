@@ -1,0 +1,33 @@
+<ROSETTASCRIPTS>
+	<SCOREFXNS>
+
+	<ScoreFunction name="ref2015" weights="ref2015" />
+
+	</SCOREFXNS>
+	<RESIDUE_SELECTORS>
+	</RESIDUE_SELECTORS>
+	<PACKER_PALETTES>
+	</PACKER_PALETTES>
+	<TASKOPERATIONS>
+	</TASKOPERATIONS>
+	<MOVE_MAP_FACTORIES>
+	</MOVE_MAP_FACTORIES>
+	<SIMPLE_METRICS>
+	</SIMPLE_METRICS>
+	<FILTERS>
+	</FILTERS>
+	<MOVERS>
+
+	<ddG name="calculate_ddg" scorefxn="ref2015" jump="1"
+        per_residue_ddg="false" repack_unbound="true" repack_bound="true"
+        relax_bound="true" relax_unbound="true"
+        translate_by="1000.0" />
+
+	</MOVERS>
+	<PROTOCOLS>
+
+	<Add mover="calculate_ddg" />
+
+	</PROTOCOLS>
+	<OUTPUT />
+</ROSETTASCRIPTS>
