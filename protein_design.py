@@ -19,17 +19,18 @@ logging.basicConfig(
     level=logging.INFO,  # Log everything from DEBUG upwards
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename=log_filepath,
-    filemode='w' # 'w' overwrites the file each time, 'a' appends
+    filemode='w' # overwrites the file each time
 )
 
 logger = logging.getLogger()
 
 class Backbone_Gen():
-  def __init__(self, input_folder = "", output_folder = "", models_folder = "", pdb_id = ""):
+  def __init__(self, input_folder = "", output_folder = "", models_folder = "", pdb_id = "", target_id = ""):
     self.inputs = input_folder
     self.outputs = output_folder
     self.models = models_folder
     self.pdb_id = pdb_id
+    self.target_id = target_id
 
   def get_pdb_file(self):
     '''
@@ -107,6 +108,7 @@ class Backbone_Gen():
                   f"Contigs: {contigs}\n"
                   f"Hotspots: {hotspots}\n"
                   f"Target PDB ID: {self.pdb_id}\n"
+                  f"Target name: {self.target_id}\n"
                   )
 
       client = docker.from_env()
@@ -269,7 +271,7 @@ class Structure_Prediction():
       """
       Runs AF2 'initial guess' using the PDB files (input) corresponding to the sequences designed by ProteinMPNN.
       """
-      logger.info("\nStarting Sequence Design with AF2 'initial guess' using default configuration...\n")
+      logger.info("\nStarting Structure Prediction with AF2 'initial guess' using default configuration...\n")
       
       # Remove the checkpoint file (from a previous run)
       checkpoint_file = "check.point" # File to remove before starting
@@ -331,9 +333,9 @@ class Structure_Prediction():
             if stripped_line.startswith('{') and stripped_line.endswith('}'):
               dict_string = stripped_line
               parsed_dict = eval(dict_string)
-              self. results[f"{design_number}"]["plddt_binder"] = parsed_dict["plddt_binder"]
-              self. results[f"{design_number}"]["pae_interaction"] = parsed_dict["pae_interaction"]
-              self. results[f"{design_number}"]["binder_aligned_rmsd"] = parsed_dict["binder_aligned_rmsd"]
+              self.results[f"{design_number}"]["plddt_binder"] = parsed_dict["plddt_binder"]
+              self.results[f"{design_number}"]["pae_interaction"] = parsed_dict["pae_interaction"]
+              self.results[f"{design_number}"]["binder_aligned_rmsd"] = parsed_dict["binder_aligned_rmsd"]
 
           # print("--- Standard Output ---")
           # print(result.stdout)
@@ -516,11 +518,12 @@ if __name__ == "__main__":
   "input_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/inputs", # Add directory where the PDB file will be downloaded
   "output_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/outputs", # Add directory where the designed proteins will be saved
   "models_folder": "/mnt/c/Users/gsaen/OneDrive - UW/Python/Structural_Bioinformatics_Course/Protein Design/Python/Backbone_Gen/models", # Add directory where the RFdiffusion models are saved
-  "design_num": 10, # Number of backbone designs to generate
-  "hotspots": "B58, B80, B139", #Hotspot residues that condition the diffusion process
+  "design_num": 100, # Number of backbone designs to generate
+  "hotspots": "A56, A115, A123", #Hotspot residues that condition the diffusion process
   "noise": 0, #Noise to add to the inference (the lower the better)
-  "contigs": "A7-98/0 A122-147/0 B17-209/0 100-100", # Configuration of the binder design
-  "pdb_id": "3DI3" # The PDB ID of the target protein
+  "contigs": "A17-139/0 75-100", # Configuration of the binder design
+  "pdb_id": "5O45", # The PDB ID of the target protein
+  "target_name": "PD-L1"
   }
 
   ProteinMPNN_settings = {
@@ -548,10 +551,10 @@ if __name__ == "__main__":
 ####################################
 
 #1. Backbone design
-  backbone = Backbone_Gen(input_folder = RFdif_settings["input_folder"], output_folder = RFdif_settings["output_folder"], models_folder = RFdif_settings["models_folder"], pdb_id = RFdif_settings["pdb_id"])
-  # backbone.get_pdb_file()
-  # backbone.remove_non_protein() #Pymol required
-  # backbone.chain_residue_ranges() #Pymol required
+  backbone = Backbone_Gen(input_folder = RFdif_settings["input_folder"], output_folder = RFdif_settings["output_folder"], models_folder = RFdif_settings["models_folder"], pdb_id = RFdif_settings["pdb_id"], target_id = RFdif_settings["target_name"])
+#   backbone.get_pdb_file()
+#   backbone.remove_non_protein() #Pymol required
+#   backbone.chain_residue_ranges() #Pymol required
   backbone.backbone_gen(design_num = RFdif_settings["design_num"], hotspots = RFdif_settings["hotspots"], noise = RFdif_settings["noise"], contigs = RFdif_settings["contigs"])
 
 #2. Sequence design
